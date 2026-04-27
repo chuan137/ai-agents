@@ -65,9 +65,8 @@ def generate_report(posts):
 
     print("AI 正在深度解析并生成报告...")
     with client.messages.stream(
-        model="claude-opus-4-7",
+        model="claude-haiku-4-5",
         max_tokens=4096,
-        thinking={"type": "adaptive"},
         messages=[{"role": "user", "content": prompt}],
     ) as stream:
         report = stream.get_final_message()
