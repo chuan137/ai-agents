@@ -1,0 +1,51 @@
+name: Daily Reddit Report
+
+on:
+  schedule:
+    # 每天 UTC 08:00（北京时间 16:00）运行
+    - cron: "0 8 * * *"
+  workflow_dispatch: # 允许手动触发
+
+jobs:
+  generate-report:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # 允许提交 daily_report.md
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install uv
+        run: pip install uv
+
+      - name: Install dependencies
+        working-directory: agent-rss
+        run: uv sync
+
+      - name: Run agent
+        working-directory: agent-rss
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: uv run python agent_v2.py
+
+      - name: Commit daily_report.md
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add agent-rss/daily_report.md
+          # 仅当文件有变更时才提交
+          git diff --cached --quiet || git commit -m "chore: update daily report $(date -u +%Y-%m-%d)"
+
+      - name: Push changes
+        uses: ad-m/github-push-action@v0.8.0
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          branch: ${{ github.ref }}

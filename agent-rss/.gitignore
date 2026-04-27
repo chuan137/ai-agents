@@ -1,1 +1,13 @@
-daily_report.md
+# Python
+__pycache__/
+*.pyc
+.venv/
+*.egg-info/
+
+# Secrets / env
+.env
+.env.*
+
+# Editor
+.DS_Store
+

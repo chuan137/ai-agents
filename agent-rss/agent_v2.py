@@ -1,30 +1,32 @@
 import feedparser
-from google import genai
+import anthropic
+import httpx
 import re
 import os
 
 # --- 配置区 ---
 RSS_URL = "https://www.reddit.com/r/ClaudeAI/.rss"
-GOOGLE_GEMINI_BASE_URL = "http://localhost:6655/gemini"
-GEMINI_API_TOKEN = os.environ["ANTHROPIC_AUTH_TOKEN"]
 MAX_POSTS = 15  # 每次总结多少条帖子，避免超出 Token 限制
 
-# 初始化 AI
-gemini_client = genai.Client(
-    api_key=GEMINI_API_TOKEN, http_options={"base_url": GOOGLE_GEMINI_BASE_URL}
-)
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+TELEGRAM_MAX_CHARS = 4096  # Telegram 单条消息上限
+
+# 初始化 Anthropic 客户端（读取 ANTHROPIC_API_KEY 环境变量）
+client = anthropic.Anthropic()
+
 
 def clean_html(raw_html):
     """清理 Reddit RSS 摘要中的 HTML 标签，只保留纯文本"""
     cleanr = re.compile('<.*?>')
     cleantext = re.sub(cleanr, '', raw_html)
-    return cleantext[:300] # 截取前300字，节省 Token
+    return cleantext[:300]  # 截取前300字，节省 Token
+
 
 def fetch_reddit_data(url):
-    print(f"正在同步 Reddit 频道数据...")
-    # 加上 User-Agent 伪装，防止被 Reddit 拒之门外
+    print("正在同步 Reddit 频道数据...")
     feed = feedparser.parse(url, response_headers={'User-Agent': 'Mozilla/5.0'})
-    
+
     posts = []
     for entry in feed.entries[:MAX_POSTS]:
         posts.append({
@@ -34,18 +36,18 @@ def fetch_reddit_data(url):
         })
     return posts
 
+
 def generate_report(posts):
     if not posts:
         return "未能抓取到任何内容，请检查网络或 RSS 链接。"
 
-    # 将数据格式化为 AI 易读的字符串
     context = ""
     for i, p in enumerate(posts):
         context += f"编号: {i+1}\n标题: {p['title']}\n摘要: {p['summary']}\n链接: {p['link']}\n\n"
 
     prompt = f"""
     你是一个专业的信息分析官。请分析以下 Reddit 帖子的内容：
-    
+
     {context}
 
     任务要求：
@@ -57,20 +59,62 @@ def generate_report(posts):
     """
 
     print("AI 正在深度解析并生成报告...")
-    response = gemini_client.models.generate_content(model="gemini-2.5-flash", contents=prompt)
-    return response.text
+    with client.messages.stream(
+        model="claude-opus-4-7",
+        max_tokens=4096,
+        thinking={"type": "adaptive"},
+        messages=[{"role": "user", "content": prompt}],
+    ) as stream:
+        report = stream.get_final_message()
+
+    # 提取文本内容
+    text = next(
+        (block.text for block in report.content if block.type == "text"),
+        "（AI 未返回文本内容）"
+    )
+    return text
+
+
+def send_telegram(text: str):
+    """将报告发送到 Telegram，超过 4096 字符则截断并提示。"""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        print("⚠️  未配置 TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID，跳过 Telegram 发送。")
+        return
+
+    if len(text) > TELEGRAM_MAX_CHARS:
+        truncated = text[: TELEGRAM_MAX_CHARS - 100]
+        text = truncated + "\n\n…（报告过长，已截断，完整内容见 daily_report.md）"
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": text,
+        "parse_mode": "Markdown",
+    }
+
+    try:
+        resp = httpx.post(url, json=payload, timeout=15)
+        resp.raise_for_status()
+        print("✅ 报告已发送至 Telegram")
+    except httpx.HTTPStatusError as e:
+        print(f"❌ Telegram 发送失败（HTTP {e.response.status_code}）：{e.response.text}")
+    except httpx.RequestError as e:
+        print(f"❌ Telegram 网络错误：{e}")
+
 
 if __name__ == "__main__":
-    # 执行流程
     data = fetch_reddit_data(RSS_URL)
     report = generate_report(data)
-    
-    print("\n" + "="*50)
+
+    print("\n" + "=" * 50)
     print("🚀 深度话题追踪报告")
-    print("="*50 + "\n")
+    print("=" * 50 + "\n")
     print(report)
-    
-    # 可选：保存到本地 Markdown 文件
+
+    # 保存到本地 Markdown 文件
     with open("daily_report.md", "w", encoding="utf-8") as f:
         f.write(report)
         print("\n✅ 报告已保存至 daily_report.md")
+
+    # 发送到 Telegram
+    send_telegram(report)
