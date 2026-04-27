@@ -25,7 +25,12 @@ def clean_html(raw_html):
 
 def fetch_reddit_data(url):
     print("正在同步 Reddit 频道数据...")
-    feed = feedparser.parse(url, response_headers={'User-Agent': 'Mozilla/5.0'})
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+    }
+    resp = httpx.get(url, headers=headers, follow_redirects=True, timeout=15)
+    resp.raise_for_status()
+    feed = feedparser.parse(resp.text)
 
     posts = []
     for entry in feed.entries[:MAX_POSTS]:
